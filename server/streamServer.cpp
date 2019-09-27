@@ -297,51 +297,24 @@ void StreamServer::ProcessRequest(const jsonrpcpp::request_ptr request, jsonrpcp
 				/// Response:     {"id":3,"jsonrpc":"2.0","result":{"server":{"groups":[{"clients":[{"config":{"instance":2,"latency":6,"name":"123 456","volume":{"muted":false,"percent":48}},"connected":true,"host":{"arch":"x86_64","ip":"127.0.0.1","mac":"00:21:6a:7d:74:fc","name":"T400","os":"Linux Mint 17.3 Rosa"},"id":"00:21:6a:7d:74:fc#2","lastSeen":{"sec":1488025901,"usec":864472},"snapclient":{"name":"Snapclient","protocolVersion":2,"version":"0.10.0"}},{"config":{"instance":1,"latency":0,"name":"","volume":{"muted":false,"percent":100}},"connected":true,"host":{"arch":"x86_64","ip":"127.0.0.1","mac":"00:21:6a:7d:74:fc","name":"T400","os":"Linux Mint 17.3 Rosa"},"id":"00:21:6a:7d:74:fc","lastSeen":{"sec":1488025905,"usec":45238},"snapclient":{"name":"Snapclient","protocolVersion":2,"version":"0.10.0"}}],"id":"4dcc4e3b-c699-a04b-7f0c-8260d23c43e1","muted":false,"name":"","stream_id":"stream 2"}],"server":{"host":{"arch":"x86_64","ip":"","mac":"","name":"T400","os":"Linux Mint 17.3 Rosa"},"snapserver":{"controlProtocolVersion":1,"name":"Snapserver","protocolVersion":1,"version":"0.10.0"}},"streams":[{"id":"stream 1","status":"idle","uri":{"fragment":"","host":"","path":"/tmp/snapfifo","query":{"buffer_ms":"20","codec":"flac","name":"stream 1","sampleformat":"48000:16:2"},"raw":"pipe:///tmp/snapfifo?name=stream 1","scheme":"pipe"}},{"id":"stream 2","status":"idle","uri":{"fragment":"","host":"","path":"/tmp/snapfifo","query":{"buffer_ms":"20","codec":"flac","name":"stream 2","sampleformat":"48000:16:2"},"raw":"pipe:///tmp/snapfifo?name=stream 2","scheme":"pipe"}}]}}}
 				/// Notification: {"jsonrpc":"2.0","method":"Server.OnUpdate","params":{"server":{"groups":[{"clients":[{"config":{"instance":2,"latency":6,"name":"123 456","volume":{"muted":false,"percent":48}},"connected":true,"host":{"arch":"x86_64","ip":"127.0.0.1","mac":"00:21:6a:7d:74:fc","name":"T400","os":"Linux Mint 17.3 Rosa"},"id":"00:21:6a:7d:74:fc#2","lastSeen":{"sec":1488025901,"usec":864472},"snapclient":{"name":"Snapclient","protocolVersion":2,"version":"0.10.0"}},{"config":{"instance":1,"latency":0,"name":"","volume":{"muted":false,"percent":100}},"connected":true,"host":{"arch":"x86_64","ip":"127.0.0.1","mac":"00:21:6a:7d:74:fc","name":"T400","os":"Linux Mint 17.3 Rosa"},"id":"00:21:6a:7d:74:fc","lastSeen":{"sec":1488025905,"usec":45238},"snapclient":{"name":"Snapclient","protocolVersion":2,"version":"0.10.0"}}],"id":"4dcc4e3b-c699-a04b-7f0c-8260d23c43e1","muted":false,"name":"","stream_id":"stream 2"}],"server":{"host":{"arch":"x86_64","ip":"","mac":"","name":"T400","os":"Linux Mint 17.3 Rosa"},"snapserver":{"controlProtocolVersion":1,"name":"Snapserver","protocolVersion":1,"version":"0.10.0"}},"streams":[{"id":"stream 1","status":"idle","uri":{"fragment":"","host":"","path":"/tmp/snapfifo","query":{"buffer_ms":"20","codec":"flac","name":"stream 1","sampleformat":"48000:16:2"},"raw":"pipe:///tmp/snapfifo?name=stream 1","scheme":"pipe"}},{"id":"stream 2","status":"idle","uri":{"fragment":"","host":"","path":"/tmp/snapfifo","query":{"buffer_ms":"20","codec":"flac","name":"stream 2","sampleformat":"48000:16:2"},"raw":"pipe:///tmp/snapfifo?name=stream 2","scheme":"pipe"}}]}}}
 				vector<string> clients = request->params().get("clients");
-				/// Remove clients from group
-				for (auto iter = group->clients.begin(); iter != group->clients.end();)
-				{
-					auto client = *iter;
-					if (find(clients.begin(), clients.end(), client->id) != clients.end())
-					{
-						++iter;
-						continue;
-					}
-					iter = group->clients.erase(iter);
-					GroupPtr newGroup = Config::instance().addClientInfo(client);
-					newGroup->streamId = group->streamId;
-				}
-
-				/// Add clients to group
-				PcmStreamPtr stream = streamManager_->getStream(group->streamId);
+				// Move clients from their old group to the target group
 				for (const auto& clientId: clients)
 				{
 					ClientInfoPtr client = Config::instance().getClientInfo(clientId);
 					if (!client)
 						continue;
+					// Already in target group?
 					GroupPtr oldGroup = Config::instance().getGroupFromClient(client);
 					if (oldGroup && (oldGroup->id == group->id))
 						continue;
-
+					// Remove from old group
 					if (oldGroup)
-					{
 						oldGroup->removeClient(client);
-						Config::instance().remove(oldGroup);
-					}
 
+					// Add to target group
 					group->addClient(client);
 
-					/// assign new stream
-					session_ptr session = getStreamSession(client->id);
-					if (session && stream && (session->pcmStream() != stream))
-					{
-						session->sendAsync(stream->getMeta());
-						session->sendAsync(stream->getHeader());
-						session->setPcmStream(stream);
-					}
 				}
-
-				if (group->empty())
-					Config::instance().remove(group);
 
 				json server = Config::instance().getServerStatus(streamManager_->toJson());
 				result["server"] = server;
@@ -349,12 +322,61 @@ void StreamServer::ProcessRequest(const jsonrpcpp::request_ptr request, jsonrpcp
 				/// Notify others: since at least two groups are affected, send a complete server update
 				notification.reset(new jsonrpcpp::Notification("Server.OnUpdate", jsonrpcpp::Parameter("server", server)));
 			}
+			else if (request->method() == "Group.Delete")
+			{
+				/// Request:      {"id":5,"jsonrpc":"2.0","method":"Group.Delete","params":{"id":"4dcc4e3b-c699-a04b-7f0c-8260d23c43e1"}}
+				/// Response:     {"id":5,"jsonrpc":"2.0","result":{"id":"4dcc4e3b-c699-a04b-7f0c-8260d23c43e1"}}
+
+				LOG(INFO) << "Group.Delete('" << group->id << "')\n";
+				result["id"] = group->id;
+
+				Config::instance().remove(group, 1);
+
+				/// Notify others: as we have lost a group we need to notify others
+				json server = Config::instance().getServerStatus(streamManager_->toJson());
+				notification.reset(new jsonrpcpp::Notification("Server.OnUpdate", jsonrpcpp::Parameter("server", server)));
+			}
+			else if (request->method() == "Group.Rename")
+			{
+				/// Request:      {"id":5,"jsonrpc":"2.0","method":"Group.Rename","params":{"id":"4dcc4e3b-c699-a04b-7f0c-8260d23c43e1","name":"Zone Name"}}
+				/// Response:     {"id":5,"jsonrpc":"2.0","result":{"id":"4dcc4e3b-c699-a04b-7f0c-8260d23c43e1","name":"Zone Name"}}
+				/// Notification: XXX: HOW TO UPDATE GROUP NAME ONLY??? Server.OnUpdate?
+
+				string name = request->params().get("name");
+				LOG(INFO) << "Group.Rename(" << group->id << ", '" << name << "')\n";
+				group->name = name;
+
+				result["id"] = group->id;
+				result["name"] = name;
+
+				/// Notify others: XXX: dont have a Group.OnUpdate, check?
+				json server = Config::instance().getServerStatus(streamManager_->toJson());
+				notification.reset(new jsonrpcpp::Notification("Server.OnUpdate", jsonrpcpp::Parameter("server", server)));
+			}
 			else
 				throw jsonrpcpp::MethodNotFoundException(request->id());
 		}
 		else if (request->method().find("Server.") == 0)
 		{
-			if (request->method().find("Server.GetRPCVersion") == 0)
+			if (request->method().find("Server.AddGroup") == 0)
+			{
+				/// Request:      {"id":5,"jsonrpc":"2.0","method":"Server.AddGroup","params":{"name":"New Zone Name"}} ?
+				/// Response:     {"id":5,"jsonrpc":"2.0","result":{"id":"4dcc4e3b-c699-a04b-7f0c-8260d23c43e1","name":"New Zone Name"}}
+				/// Notification: Server.OnUpdate
+
+				string name = request->params().get("name");
+				LOG(INFO) << "Server.AddGroup('" << name << "')\n";
+
+				GroupPtr group = Config::instance().addGroup(name);
+
+				result["id"] = group->id;
+				result["name"] = name;
+
+				/// Notify others: as we have a new group we need to notify others
+				json server = Config::instance().getServerStatus(streamManager_->toJson());
+				notification.reset(new jsonrpcpp::Notification("Server.OnUpdate", jsonrpcpp::Parameter("server", server)));
+			}
+			else if (request->method().find("Server.GetRPCVersion") == 0)
 			{
 				/// Request:      {"id":8,"jsonrpc":"2.0","method":"Server.GetRPCVersion"}
 				/// Response:     {"id":8,"jsonrpc":"2.0","result":{"major":2,"minor":0,"patch":0}}

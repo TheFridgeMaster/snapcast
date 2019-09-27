@@ -99,8 +99,8 @@ void Config::init(const std::string& root_directory, const std::string& user, co
 				json jGroups = j["Groups"];
 				for (auto it = jGroups.begin(); it != jGroups.end(); ++it)
 				{
-					GroupPtr group = make_shared<Group>();
-					group->fromJson(*it);
+					GroupPtr group = make_shared<Group>(*it);
+					//group->fromJson(*it);
 //					if (client->id.empty() || getClientInfo(client->id))
 //						continue;
 					groups.push_back(group);
@@ -112,6 +112,9 @@ void Config::init(const std::string& root_directory, const std::string& user, co
 	{
 		LOG(ERROR) << "Error reading config: " << e.what() << "\n";
 	}
+	
+	// Check if we have a 'default' group, create it if not
+	GroupPtr ptr = getDefaultGroup();
 }
 
 
@@ -146,15 +149,13 @@ ClientInfoPtr Config::getClientInfo(const std::string& clientId) const
 	return nullptr;
 }
 
-
 GroupPtr Config::addClientInfo(ClientInfoPtr client)
 {
 	GroupPtr group = getGroupFromClient(client);
 	if (!group)
 	{
-		group = std::make_shared<Group>();
+		group = getDefaultGroup();
 		group->addClient(client);
-		groups.push_back(group);
 	}
 	return group;
 }
@@ -168,12 +169,41 @@ GroupPtr Config::addClientInfo(const std::string& clientId)
 	return addClientInfo(client);
 }
 
+GroupPtr Config::getDefaultGroup()
+{
+	if (groups.size() == 0)
+	{
+		SLOG(INFO) << "No groups in config, adding '" << DEFAULT_GROUP << "'!\n";
+		addGroup(DEFAULT_GROUP);
+	}
+	return groups[0];
+}
+
+GroupPtr Config::addGroup(const std::string& name)
+{
+	GroupPtr group = make_shared<Group>(name);
+	groups.push_back(group);
+	return group;
+}
+
+
 
 GroupPtr Config::getGroup(const std::string& groupId) const
 {
 	for (auto group: groups)
 	{
 		if (group->id == groupId)
+			return group;
+	}
+
+	return nullptr;
+}
+
+GroupPtr Config::getGroupFromName(const std::string& name) const
+{
+	for (auto group: groups)
+	{
+		if (group->name == name)
 			return group;
 	}
 
