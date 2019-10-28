@@ -27,7 +27,7 @@
 #include "common/json.hpp"
 #include "common/utils.hpp"
 #include "common/utils/string_utils.hpp"
-
+#define DEFAULT_GROUP	"default"
 
 namespace strutils = utils::string;
 using json = nlohmann::json;
@@ -258,11 +258,15 @@ struct ClientInfo
 
 struct Group
 {
-    Group(const ClientInfoPtr client = nullptr) : muted(false)
+    Group(const json& j) : muted(false)
+	{
+		fromJson(j);
+	}
+
+	Group(const std::string& groupName) : muted(false)
     {
-        if (client)
-            id = client->id;
         id = generateUUID();
+        name = groupName;
     }
 
     void fromJson(const json& j)
@@ -380,10 +384,12 @@ public:
 
     //	GroupPtr removeFromGroup(const std::string& groupId, const std::string& clientId);
     //	GroupPtr setGroupForClient(const std::string& groupId, const std::string& clientId);
-
+    GroupPtr getDefaultGroup();
+	GroupPtr addGroup(const std::string& name);
     GroupPtr getGroupFromClient(const std::string& clientId);
     GroupPtr getGroupFromClient(ClientInfoPtr client);
     GroupPtr getGroup(const std::string& groupId) const;
+    GroupPtr getGroupFromName(const std::string& name) const;
 
     json getGroups() const;
     json getServerStatus(const json& streams) const;

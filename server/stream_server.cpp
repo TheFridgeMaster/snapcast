@@ -346,21 +346,6 @@ void StreamServer::ProcessRequest(const jsonrpcpp::request_ptr request, jsonrpcp
                 /// 2","sampleformat":"48000:16:2"},"raw":"pipe:///tmp/snapfifo?name=stream 2","scheme":"pipe"}}]}}}
                 vector<string> clients = request->params().get("clients");
                 /// Remove clients from group
-                for (auto iter = group->clients.begin(); iter != group->clients.end();)
-                {
-                    auto client = *iter;
-                    if (find(clients.begin(), clients.end(), client->id) != clients.end())
-                    {
-                        ++iter;
-                        continue;
-                    }
-                    iter = group->clients.erase(iter);
-                    GroupPtr newGroup = Config::instance().addClientInfo(client);
-                    newGroup->streamId = group->streamId;
-                }
-
-                /// Add clients to group
-                PcmStreamPtr stream = streamManager_->getStream(group->streamId);
                 for (const auto& clientId : clients)
                 {
                     ClientInfoPtr client = Config::instance().getClientInfo(clientId);
@@ -373,23 +358,10 @@ void StreamServer::ProcessRequest(const jsonrpcpp::request_ptr request, jsonrpcp
                     if (oldGroup)
                     {
                         oldGroup->removeClient(client);
-                        Config::instance().remove(oldGroup);
                     }
 
                     group->addClient(client);
-
-                    /// assign new stream
-                    session_ptr session = getStreamSession(client->id);
-                    if (session && stream && (session->pcmStream() != stream))
-                    {
-                        session->sendAsync(stream->getMeta());
-                        session->sendAsync(stream->getHeader());
-                        session->setPcmStream(stream);
-                    }
                 }
-
-                if (group->empty())
-                    Config::instance().remove(group);
 
                 json server = Config::instance().getServerStatus(streamManager_->toJson());
                 result["server"] = server;
@@ -397,12 +369,61 @@ void StreamServer::ProcessRequest(const jsonrpcpp::request_ptr request, jsonrpcp
                 /// Notify others: since at least two groups are affected, send a complete server update
                 notification.reset(new jsonrpcpp::Notification("Server.OnUpdate", jsonrpcpp::Parameter("server", server)));
             }
+            else if (request->method() == "Group.Delete")
+			{
+				/// Request:      {"id":5,"jsonrpc":"2.0","method":"Group.Delete","params":{"id":"4dcc4e3b-c699-a04b-7f0c-8260d23c43e1"}}
+				/// Response:     {"id":5,"jsonrpc":"2.0","result":{"id":"4dcc4e3b-c699-a04b-7f0c-8260d23c43e1"}}
+
+				LOG(INFO) << "Group.Delete('" << group->id << "')\n";
+				result["id"] = group->id;
+
+				Config::instance().remove(group, 1);
+
+				/// Notify others: as we have lost a group we need to notify others
+				json server = Config::instance().getServerStatus(streamManager_->toJson());
+				notification.reset(new jsonrpcpp::Notification("Server.OnUpdate", jsonrpcpp::Parameter("server", server)));
+			}
+			else if (request->method() == "Group.Rename")
+			{
+				/// Request:      {"id":5,"jsonrpc":"2.0","method":"Group.Rename","params":{"id":"4dcc4e3b-c699-a04b-7f0c-8260d23c43e1","name":"Zone Name"}}
+				/// Response:     {"id":5,"jsonrpc":"2.0","result":{"id":"4dcc4e3b-c699-a04b-7f0c-8260d23c43e1","name":"Zone Name"}}
+				/// Notification: XXX: HOW TO UPDATE GROUP NAME ONLY??? Server.OnUpdate?
+
+				string name = request->params().get("name");
+				LOG(INFO) << "Group.Rename(" << group->id << ", '" << name << "')\n";
+				group->name = name;
+
+				result["id"] = group->id;
+				result["name"] = name;
+
+				/// Notify others: XXX: dont have a Group.OnUpdate, check?
+				json server = Config::instance().getServerStatus(streamManager_->toJson());
+				notification.reset(new jsonrpcpp::Notification("Server.OnUpdate", jsonrpcpp::Parameter("server", server)));
+			}
             else
                 throw jsonrpcpp::MethodNotFoundException(request->id());
         }
         else if (request->method().find("Server.") == 0)
         {
-            if (request->method().find("Server.GetRPCVersion") == 0)
+            if (request->method().find("Server.AddGroup") == 0)
+			{
+				/// Request:      {"id":5,"jsonrpc":"2.0","method":"Server.AddGroup","params":{"name":"New Zone Name"}} ?
+				/// Response:     {"id":5,"jsonrpc":"2.0","result":{"id":"4dcc4e3b-c699-a04b-7f0c-8260d23c43e1","name":"New Zone Name"}}
+				/// Notification: Server.OnUpdate
+
+				string name = request->params().get("name");
+				LOG(INFO) << "Server.AddGroup('" << name << "')\n";
+
+				GroupPtr group = Config::instance().addGroup(name);
+
+				result["id"] = group->id;
+				result["name"] = name;
+
+				/// Notify others: as we have a new group we need to notify others
+				json server = Config::instance().getServerStatus(streamManager_->toJson());
+				notification.reset(new jsonrpcpp::Notification("Server.OnUpdate", jsonrpcpp::Parameter("server", server)));
+			}
+			else if (request->method().find("Server.GetRPCVersion") == 0)
             {
                 /// Request:      {"id":8,"jsonrpc":"2.0","method":"Server.GetRPCVersion"}
                 /// Response:     {"id":8,"jsonrpc":"2.0","result":{"major":2,"minor":0,"patch":0}}
